@@ -7,11 +7,11 @@ import io
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 
-# --- CONFIGURAZIONE ---
+# --- CONFIGURAZIONE ESTRATTA ---
 st.set_page_config(page_title="Global Training Optimizer PRO", layout="wide")
 geolocator = Nominatim(user_agent="training_optimizer_pro")
 
-# --- FUNZIONI UTILI ---
+# --- FUNZIONI DI SERVIZIO PER L'ELASTICITÀ ---
 @st.cache_data
 def get_coords(citta):
     """Ottiene coordinate GPS di qualsiasi città nel mondo."""
@@ -28,14 +28,14 @@ def calcola_km(orig_coords, dest_coords):
     dist_lineare = geodesic(orig_coords, dest_coords).km
     return int(dist_lineare * 1.25) 
 
-# --- CLASSE PRINCIPALE ---
+# --- CLASSE LOGICA GLOBALE ---
 class GlobalTrainingPlanner:
     def __init__(self):
         if 'sedi_custom' not in st.session_state:
-            st.session_state.sedi_custom = {}  # Dizionario sedi
+            st.session_state.sedi_custom = {}  # Dizionario vuoto per massima elasticità
         self.df_pax = pd.DataFrame()
 
-    def analizza(self, sedi_config, r_km, d_pranzo, c_notte, v_uomo):
+    def analizza(self, sedi_config, r_km, d_pranzo, c_notte, v_uomo, fattore_volo=2.5):
         if self.df_pax.empty or not sedi_config:
             return None, [], []
 
@@ -44,18 +44,20 @@ class GlobalTrainingPlanner:
         mappa = []
         tabella = []
         
-        # Divisione Relatori / Partecipanti
+        # Divisione logica (Relatori vs Partecipanti)
         relatori = self.df_pax[self.df_pax['ruolo'].str.contains('relatore', case=False, na=False)]
         partecipanti = self.df_pax[~self.df_pax['ruolo'].str.contains('relatore', case=False, na=False)]
 
+        # Assegnazione automatica partecipante alla sede più vicina
         sedi_nomi = list(sedi_config.keys())
         
         for _, row in partecipanti.iterrows():
             coords_pax = get_coords(row['citta'])
             if not coords_pax:
+                st.warning(f"Impossibile ottenere coordinate per: {row['nome']} ({row['citta']})")
                 continue
             
-            # Sede più vicina
+            # Trova sede più vicina tra quelle scelte
             distanze_sedi = {}
             for s_nome in sedi_nomi:
                 c_sede = st.session_state.sedi_custom[s_nome]['lat_long']
@@ -65,11 +67,11 @@ class GlobalTrainingPlanner:
             km = distanze_sedi[sede_opt]
             gg_training = sedi_config[sede_opt]
             
-            # Pernotto / costo
+            # Logica pernotto e costi
             serve_pernotto = km > 400 or any(x in row['citta'].lower() for x in ["sicilia", "sardegna", "palermo", "cagliari"])
             costo_viaggio = km * 2 * r_km
             costo_pax = costo_viaggio + (d_pranzo * gg_training)
-            if serve_pernotto:
+            if serve_pernotto: 
                 costo_pax += (c_notte * gg_training)
             
             gg_persi = gg_training + (2 if serve_pernotto else 1)
@@ -88,7 +90,7 @@ class GlobalTrainingPlanner:
                 "Km A/R": km*2, "Costo (€)": round(costo_pax, 2), "Gg Lavoro Persi": gg_persi
             })
 
-        # Costi fissi sale
+        # Aggiunta costi fissi sale
         for s in sedi_nomi:
             tot_vivi += st.session_state.sedi_custom[s]['costo']
 
@@ -100,14 +102,15 @@ class GlobalTrainingPlanner:
 planner = GlobalTrainingPlanner()
 st.title("🌍 AI Global Training Optimizer 2.0")
 
-# Sidebar - Parametri economici
+# Sidebar parametri economici
 st.sidebar.header("💰 Parametri Economici")
 r_km = st.sidebar.slider("Rimborso KM (€)", 0.10, 1.0, 0.44)
 v_uomo = st.sidebar.number_input("Valore Giorno/Uomo (€)", value=500)
-d_pranzo = st.sidebar.number_input("Costo Pranzo (€)", value=30)
-c_notte = st.sidebar.number_input("Costo Pernotto (€)", value=130)
+d_pranzo = st.sidebar.number_input("Costo pranzo (€)", value=30)
+c_notte = st.sidebar.number_input("Costo notte (€)", value=130)
+fattore_volo = st.sidebar.number_input("Fattore moltiplicativo aereo", value=2.5)
 
-# 1. Configurazione sedi
+# --- 1. GESTIONE SEDI ELASTICA ---
 st.subheader("1️⃣ Configurazione Sedi Training")
 with st.expander("📍 Aggiungi qualsiasi città nel mondo come sede"):
     col1, col2, col3 = st.columns([2,1,2])
@@ -125,28 +128,33 @@ with st.expander("📍 Aggiungi qualsiasi città nel mondo come sede"):
 if st.session_state.sedi_custom:
     st.write("Sedi attive:", ", ".join(st.session_state.sedi_custom.keys()))
 
-# 2. Input partecipanti
+# --- 2. INPUT PARTECIPANTI ---
 st.subheader("2️⃣ Partecipanti")
-uploaded = st.file_uploader("Carica Excel/CSV con colonne 'citta', 'nome', 'ruolo'", type=["xlsx", "csv"])
+uploaded = st.file_uploader("Carica Excel o CSV con colonne 'citta', 'nome', 'ruolo'", type=["xlsx","csv"])
 if uploaded:
-    # Lettura file
-    if uploaded.name.endswith('.csv'):
-        planner.df_pax = pd.read_csv(uploaded)
-    else:
-        planner.df_pax = pd.read_excel(uploaded)
+    try:
+        if uploaded.name.endswith('.csv'):
+            planner.df_pax = pd.read_csv(uploaded, header=0)
+        else:
+            planner.df_pax = pd.read_excel(uploaded, header=0)
+    except Exception as e:
+        st.error(f"Errore caricamento file: {e}")
     
-    # Normalizza intestazioni
+    # Normalizzazione colonne
     planner.df_pax.columns = planner.df_pax.columns.str.strip().str.lower()
+    planner.df_pax.columns = planner.df_pax.columns.str.replace('à','a')
+    planner.df_pax.columns = planner.df_pax.columns.str.replace('luogo','citta')
     
-    # Controllo colonne obbligatorie
-    richieste = ['citta', 'nome', 'ruolo']
-    if not all(col in planner.df_pax.columns for col in richieste):
-        st.error(f"File mancante colonne obbligatorie: {richieste}")
+    # Verifica colonne obbligatorie
+    colonne_obbligatorie = ['citta', 'nome', 'ruolo']
+    missing = [c for c in colonne_obbligatorie if c not in planner.df_pax.columns]
+    if missing:
+        st.error(f"File mancante colonne obbligatorie: {missing}")
     else:
         st.success("File caricato correttamente!")
         st.write(planner.df_pax.head())
 
-# 3. Analisi comparativa
+# --- 3. ANALISI COMPARATIVA ---
 if not planner.df_pax.empty and st.session_state.sedi_custom:
     st.divider()
     col_a, col_b = st.columns(2)
@@ -155,7 +163,7 @@ if not planner.df_pax.empty and st.session_state.sedi_custom:
         st.write("### Scenario A")
         scelta_a = st.multiselect("Seleziona Sedi A", list(st.session_state.sedi_custom.keys()))
         config_a = {s: st.number_input(f"Giorni a {s} (A)", 1, 5, 1) for s in scelta_a}
-        res_a, map_a, tab_a = planner.analizza(config_a, r_km, d_pranzo, c_notte, v_uomo)
+        res_a, map_a, tab_a = planner.analizza(config_a, r_km, d_pranzo, c_notte, v_uomo, fattore_volo)
         if res_a:
             st.metric("Totale Scenario A", f"€{res_a['totale']:,.0f}")
 
@@ -163,11 +171,11 @@ if not planner.df_pax.empty and st.session_state.sedi_custom:
         st.write("### Scenario B")
         scelta_b = st.multiselect("Seleziona Sedi B", list(st.session_state.sedi_custom.keys()))
         config_b = {s: st.number_input(f"Giorni a {s} (B)", 1, 5, 1) for s in scelta_b}
-        res_b, map_b, tab_b = planner.analizza(config_b, r_km, d_pranzo, c_notte, v_uomo)
+        res_b, map_b, tab_b = planner.analizza(config_b, r_km, d_pranzo, c_notte, v_uomo, fattore_volo)
         if res_b:
             st.metric("Totale Scenario B", f"€{res_b['totale']:,.0f}")
 
-    # Mappa
+    # MAPPA
     if map_a:
         st.write("### 🗺️ Visualizzazione Logistica")
         df_map = pd.DataFrame(map_a)
@@ -175,20 +183,9 @@ if not planner.df_pax.empty and st.session_state.sedi_custom:
             map_style="mapbox://styles/mapbox/light-v9",
             initial_view_state=pdk.ViewState(latitude=42, longitude=12, zoom=5),
             layers=[
-                pdk.Layer(
-                    "ArcLayer", df_map,
-                    get_source_position=["lon_o", "lat_o"],
-                    get_target_position=["lon_d", "lat_d"],
-                    get_source_color=[0,0,255,100],
-                    get_target_color=[0,255,0,100],
-                    get_width=2
-                ),
-                pdk.Layer(
-                    "ScatterplotLayer", df_map,
-                    get_position=["lon_o", "lat_o"],
-                    get_radius=10000,
-                    get_color=[255,0,0]
-                )
+                pdk.Layer("ArcLayer", df_map, get_source_position=["lon_o", "lat_o"], get_target_position=["lon_d", "lat_d"],
+                          get_source_color=[0, 0, 255, 100], get_target_color=[0, 255, 0, 100], get_width=2),
+                pdk.Layer("ScatterplotLayer", df_map, get_position=["lon_o", "lat_o"], get_radius=10000, get_color=[255, 0, 0])
             ]
         ))
         st.write("### 📊 Dettaglio Costi")
