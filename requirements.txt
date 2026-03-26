@@ -1,3 +1,6 @@
-python-docx
+streamlit
+pandas
+numpy
 openpyxl
-matplotlib
+pydeck
+fpdf
