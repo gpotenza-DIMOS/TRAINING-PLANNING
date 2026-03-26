@@ -1,0 +1,101 @@
+import pandas as pd
+
+class TrainingPlanner:
+    def __init__(self):
+        # Database delle sedi disponibili e relativi costi fissi (affitto sala)
+        self.sedi_aziendali = {
+            "Firenze": {"costo_sala": 0, "capacita": 50, "lat_long": (43.82, 11.13)},
+            "Falconara Marittima": {"costo_sala": 0, "capacita": 10, "lat_long": (43.62, 13.39)},
+            "Roma": {"costo_sala": 225, "capacita": 20, "lat_long": (41.89, 12.49)}, # Media 150-300
+            "Cantù": {"costo_sala": 0, "capacita": 10, "lat_long": (45.73, 9.12)},
+            "Salerno": {"costo_sala": 400, "capacita": 30, "lat_long": (40.67, 14.78)} # Media 300-500
+        }
+        
+        # Parametri di costo (Personalizzabili)
+        self.rimborso_km = 0.35  # Costo per km (carburante + usura auto media/alta)
+        self.diaria_pranzo = 30.0
+        self.costo_pernotto_cena = 120.0
+        self.costo_aereo_medio = 200.0
+        self.valore_giorno_uomo = 250.0 # Costo opportunità per vendite perse
+        
+    def carica_partecipanti_manuale(self, lista_dati):
+        """
+        Input: Lista di dizionari con {'citta': ..., 'nome': ..., 'ruolo': ...}
+        """
+        self.df_pax = pd.DataFrame(lista_dati)
+        return self.df_pax
+
+    def calcola_distanza_approssimativa(self, citta_orig, citta_dest):
+        """
+        In un sistema reale qui useresti le API di Google Maps o OpenStreetMap.
+        Per questo esempio usiamo una stima chilometrica semplificata.
+        """
+        # Dizionario km approssimativi A/R dalle sedi principali (Esempio)
+        distanze = {
+            ("Torino", "Cantù"): 320, ("Udine", "Cantù"): 700, ("Palermo", "Salerno"): 700,
+            ("Ancona", "Firenze"): 400, ("Brescia", "Cantù"): 120, ("Modena", "Cantù"): 400,
+            # ... aggiungere le altre tratte
+        }
+        return distanze.get((citta_orig, citta_dest), 500) # 500km default se non in lista
+
+    def analizza_scenario(self, sedi_scelte, giorni_training):
+        report = []
+        totale_costi_vivi = 0
+        totale_giornate_perse = 0
+        
+        # 1. Identifica i Relatori
+        relatori = self.df_pax[self.df_pax['ruolo'].str.contains('Relatore', case=False)]
+        partecipanti = self.df_pax[~self.df_pax['ruolo'].str.contains('Relatore', case=False)]
+        
+        print(f"--- ANALISI SCENARIO: {', '.join(sedi_scelte)} ({giorni_training} giorni) ---")
+        
+        for sede in sedi_scelte:
+            costo_sede = self.sedi_aziendali[sede]['costo_sala']
+            totale_costi_vivi += costo_sede
+            
+            # Simuliamo l'assegnazione automatica alla sede più vicina (Logica semplificata)
+            # In un codice reale, ogni pax va alla sede con 'min' distanza
+            pax_in_questa_sede = partecipanti.sample(frac=1/len(sedi_scelte)) # Split demo
+            
+            for _, row in pax_in_questa_sede.iterrows():
+                km = self.calcola_distanza_approssimativa(row['citta'], sede)
+                costo_viaggio = km * self.rimborso_km
+                
+                # Logica pernotto
+                serve_pernotto = km > 400 or "Sardegna" in row['citta'] or "Sicilia" in row['citta']
+                costo_pax = costo_viaggio + self.diaria_pranzo
+                if serve_pernotto:
+                    costo_pax += self.costo_pernotto_cena
+                
+                totale_costi_vivi += costo_pax
+                totale_giornate_perse += giorni_training
+                
+        # Aggiungi costi relatori (presenti a tutti gli eventi)
+        costo_relatori = len(relatori) * len(sedi_scelte) * 200 # Stima viaggio/hotel
+        totale_costi_vivi += costo_relatori
+        
+        # Risultati
+        print(f"Costi Vivi Totali: €{totale_costi_vivi:.2f}")
+        print(f"Giornate Lavoro Perse: {totale_giornate_perse}")
+        print(f"Impatto Economico Produttività (stima): €{totale_giornate_perse * self.valore_giorno_uomo:.2f}")
+        print("-" * 50)
+
+# --- ESEMPIO DI UTILIZZO ---
+planner = TrainingPlanner()
+
+# Caricamento dati (puoi farlo da Excel con pd.read_excel('file.xlsx'))
+dati = [
+    {"citta": "Torino", "nome": "Ilie Racu", "ruolo": "Agente"},
+    {"citta": "Brescia", "nome": "Luca Pitorri", "ruolo": "Relatore"},
+    {"citta": "Ancona", "nome": "Gabriele Potenza", "ruolo": "Relatore"},
+    {"citta": "Modena", "nome": "Bogdan Nistor", "ruolo": "Relatore"},
+    {"citta": "Palermo", "nome": "Carmen Zaami", "ruolo": "Agente"},
+    # ... inserire tutti gli altri 26
+]
+planner.carica_partecipanti_manuale(dati)
+
+# Simulazione Scenario 1: 3 Sedi, 1 giorno di corso
+planner.analizza_scenario(["Cantù", "Falconara Marittima", "Salerno"], giorni_training=1)
+
+# Simulazione Scenario 2: 2 Sedi, 2 giorni di corso
+planner.analizza_scenario(["Firenze", "Roma"], giorni_training=2)
