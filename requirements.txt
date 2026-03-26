@@ -1,7 +1,5 @@
 streamlit
 pandas
-numpy
-pydeck
-fpdf
-geopy
 openpyxl
+geopy
+pydeck
